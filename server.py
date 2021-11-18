@@ -4,7 +4,6 @@ import socket
 import sys
 import random
 import string
-import watchdog
 
 # consts
 BYTES_FOR_COUNTER = 3
@@ -14,14 +13,10 @@ MIN_PORT = 0
 ARGUMENTS_NUMBER = 2
 CHARACTERS = 128
 NEW_ID = "ID".zfill(CHARACTERS)
-# SERVER_PATH = "/home/coral/Desktop/Communication Network/"
 SERVER_PATH = os.getcwd() + "/"
+CURRENT = -1
 
 
-# class Handler(watchdog.events.PatternMatchingEventHandler):
-#     def __init__(self):
-#         watchdog.events.PatternMatchingEventHandler(self, patterns={}, ignore_patterns=None,
-#                                                     ignore_directiries=False, case_sensitive=True)
 
 '''
 The function creates a new identifier for a new client.
@@ -42,7 +37,7 @@ def server(port):
     s.bind(('', port))
     s.listen(5)
 
-    # new client dictionary
+    # new clients dictionary
     clients = {}
 
     while True:
@@ -59,32 +54,73 @@ def server(port):
             path = os.path.join(SERVER_PATH, identifier)
             os.mkdir(path)
 
-            while True:
-                name_size = int.from_bytes(client_socket.recv(4), sys.byteorder)
-                name = str(client_socket.recv(name_size), 'UTF-8')
-                file_to_write = open(path + '/' + name, "wb")
-                file_data = client_socket.recv(1024)
-                while file_data:
-                    file_to_write.write(file_data)
-                    file_data = client_socket.recv(1024)
-                print("Download Completed")
-                file_to_write.close()
-                break
+            # base dir of client
+            dir_stack = [path]
 
+            while True:
+                option = str(client_socket.recv(1), 'UTF-8')
+
+                # no more
+                if option == "0":
+                    break
+                # file
+                elif option == "1":
+                    # getting the name of the file
+                    file_name_len = int.from_bytes(client_socket.recv(8), sys.byteorder)
+                    file_name = str(client_socket.recv(file_name_len), 'UTF-8')
+                    # file_to_write = open(dir_stack[LAST] + '/' + file_name, "wb")
+                    file_to_write = open(os.path.join(dir_stack[CURRENT], file_name), "wb")
+                    # getting the size of file
+                    file_len = int.from_bytes(client_socket.recv(8), sys.byteorder)
+                    counter = file_len
+
+                    if file_len < 1024:
+                        file = client_socket.recv(file_len)
+                    else:
+                        file = client_socket.recv(1024)
+
+                    while file:
+                        file_to_write.write(file)
+                        counter = counter - len(file)
+                        if counter <= 0:
+                            break
+                        elif counter < 1024:
+                            file = client_socket.recv(counter)
+                        else:
+                            file = client_socket.recv(1024)
+                    print("Download Completed")
+                    file_to_write.close()
+
+                # create new folder
+                elif option == "2":
+                    # getting the name of the file
+                    dir_name_len = int.from_bytes(client_socket.recv(8), sys.byteorder)
+                    dir_name = str(client_socket.recv(dir_name_len), 'UTF-8')
+                    dir_stack.append(os.path.join(dir_stack[CURRENT], dir_name))
+                    os.mkdir(dir_stack[CURRENT])
+
+                # change dir to " "
+                elif option == "3":
+                    # getting the name of the file
+                    dir_name_len = int.from_bytes(client_socket.recv(8), sys.byteorder)
+                    dir_name = str(client_socket.recv(dir_name_len), 'UTF-8')
+
+                    for i in range(len(dir_stack)):
+                        tokens = dir_stack[i].split('/')
+                        if tokens[-1] == dir_name:
+                            temp = dir_stack.pop(i)
+                            dir_stack.append(temp)
+                            break
+
+                    # result - dir_stack[CURRENT] = desired folder
 
 
         # existing client
         else:
-            identifier = str_data
+            # identifier = str_data
             # doing the logic of the client
             pass
 
-
-            
-
-
-
-        client_socket.send(data.upper())
         # client_socket.close()
         print("Client disconnected.")
 
