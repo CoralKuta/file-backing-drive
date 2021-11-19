@@ -36,34 +36,57 @@ def track_data_without_id(ip, port, path, timer):
 
 
 def send_data_first_time(socket_client, path):
-    counter = 0
-    for root, dirs, files in os.walk(path, True):
-        if counter != 0:
-            # send 3 to server- means to server that he should enter new folder
-            socket_client.send(bytes("3", 'UTF-8'))
-            name_of_folder = os.path.basename(root)
-            # send size of name file and the name of folder
-            socket_client.send(len(name_of_folder).to_bytes(8, sys.byteorder))
-            socket_client.send(bytes(name_of_folder, 'UTF-8'))
-        for name in files:
-            send_file(socket_client, name, os.path.join(root, name))
-        for name in dirs:
-            send_folder_in_current_path(socket_client, name)
-        counter = counter + 1
+    for root, dirs, files in os.walk(path):
+
+        root_name = os.path.basename(root)
+
+        # only sub-directories
+        for directory_name in dirs:
+            send_folder_name(socket_client, directory_name, root_name)
+
+        # only files
+        for file_name in files:
+            file_path = os.path.join(root, file_name)
+            send_file(socket_client, file_name, file_path, root_name)
 
 
-def send_file(socket_client, file_name, file_path):
+def send_name(s, name):
+    length = len(name)
+    s.send(length.to_bytes(8, sys.byteorder))
+    s.send(bytes(name, 'UTF-8'))
+
+
+def send_length(s, data):
+    length = os.path.getsize(data)
+    s.send(length.to_bytes(8, sys.byteorder))
+
+
+def send_folder_name(socket_client, folder_name, mother_folder):
+    # send 2 to server- means that we send a folder in current
+    socket_client.send(bytes("2", 'UTF-8'))
+
+    # send size of name file and the name of file
+    send_name(socket_client, folder_name)
+
+    # where the server makes the folder ??
+    send_name(socket_client, mother_folder)
+
+
+def send_file(socket_client, file_name, file_data, mother_folder):
     # send 1 to server- means that we send a file
     socket_client.send(bytes("1", 'UTF-8'))
-    # send size of name file and the name of file
-    length_file_name = len(file_name)
-    socket_client.send(length_file_name.to_bytes(8, sys.byteorder))
-    socket_client.send(bytes(file_name, 'UTF-8'))
+
+    # send file name
+    send_name(socket_client, file_name)
+
+    # send where the file belongs
+    send_name(socket_client, mother_folder)
+
     # send the size of the file
-    length_bytes_file = os.path.getsize(file_path)
-    socket_client.send(length_bytes_file.to_bytes(8, sys.byteorder))
+    send_length(socket_client, file_data)
+
     # start send the data that in the file
-    file = open(file_path, "rb")
+    file = open(file_data, "rb")
     data = file.read(1024)
     # send the bytes in the file
     while data:
@@ -71,14 +94,6 @@ def send_file(socket_client, file_name, file_path):
         data = file.read(1024)
     file.close()
 
-
-def send_folder_in_current_path(socket_client, folder_name):
-    # send 2 to server- means that we send a folder in current
-    socket_client.send(bytes("2", 'UTF-8'))
-    # send size of name file and the name of file
-    length_file_name = len(folder_name)
-    socket_client.send(length_file_name.to_bytes(8, sys.byteorder))
-    socket_client.send(bytes(folder_name, 'UTF-8'))
 
 
 def check_arguments(arr):
