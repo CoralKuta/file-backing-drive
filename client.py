@@ -15,6 +15,7 @@ MAX_IP_NUM = 255
 MIN_IP_NUM = 0
 SIZE_ID = 128
 BYTES_TO_READ = 1024
+NO_SEQUENCE_NUMBER = 0
 
 # list of all files and folders in the path
 global files_and_folders
@@ -23,6 +24,9 @@ global socket_client
 global global_path
 global global_folder
 global global_identifier
+global global_sequence_number
+global global_ip
+global global_port
 
 
 def track_data_with_id(ip, port, path, timer, identifier):
@@ -31,6 +35,12 @@ def track_data_with_id(ip, port, path, timer, identifier):
     global global_path
     global global_folder
     global global_identifier
+    global global_sequence_number
+    global global_ip
+    global global_port
+    global_ip = ip
+    global_port = int(port)
+    global_identifier = identifier
     files_and_folders = []
     # create socket with TCP protocol
     socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -40,12 +50,32 @@ def track_data_with_id(ip, port, path, timer, identifier):
     _, global_folder = os.path.split(global_path)
     # connect to server (SYN) - save him the identifier
     socket_client.connect((ip, int(port)))
-    # start monitor the data with the server.
-    track_data(path, timer, identifier)
+    # send the identifier to the server
     socket_client.send(bytes(identifier, 'UTF-8'))
-
-    # end of talk with server
+    # send the server that we dont have sequence number now
+    socket_client.send(NO_SEQUENCE_NUMBER.to_bytes(8, sys.byteorder))
+    # save the sequence number of this number
+    global_sequence_number = int.from_bytes(socket_client.recv(8), sys.byteorder)
+    # pull the data from the server
+    pull_data()
+    # disconnect from server
     socket_client.close()
+    # start monitor the data with the server.
+    track_data(path, timer)
+
+
+def pull_data():
+    while True:
+        option = str(socket_client.recv(1), 'UTF-8')
+        # no more data to pull
+        if option == "0":
+            break
+        # create new file
+        elif option == "1":
+            create_new_file()
+        # create new folder
+        elif option == "2":
+            create_new_folder()
 
 
 def track_data_without_id(ip, port, path, timer):
@@ -54,6 +84,11 @@ def track_data_without_id(ip, port, path, timer):
     global global_path
     global global_folder
     global global_identifier
+    global global_sequence_number
+    global global_ip
+    global global_port
+    global_ip = ip
+    global_port = int(port)
     files_and_folders = []
     # create socket with TCP protocol
     socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -67,31 +102,32 @@ def track_data_without_id(ip, port, path, timer):
     id_str = "ID".zfill(SIZE_ID)
     socket_client.send(bytes(id_str, 'UTF-8'))
     identifier = str(socket_client.recv(SIZE_ID), 'UTF-8')
+    print(identifier)
     global_identifier = identifier
+    # save the sequence number of this number
+    global_sequence_number = int.from_bytes(socket_client.recv(8), sys.byteorder)
     # send data to server
-    send_data_first_time(path)
+    send_data_first_time()
     # send 0 to server- means that we finished send the files, start tracking
     socket_client.send(bytes("0", 'UTF-8'))
-    # start monitor the data with the server.
-    track_data(path, timer, identifier)
     # end of talk with server
     socket_client.close()
+    # start monitor the data with the server.
+    track_data(path, timer)
 
 
-def send_data_first_time(path):
-    for root, dirs, files in os.walk(path):
-        # add the root to the list of fies and folders
-        files_and_folders.append(root)
-        root_name = os.path.basename(root)
+def send_data_first_time():
+    for root, dirs, files in os.walk(global_path):
         # only sub-directories
         for directory_name in dirs:
-            send_folder_name(directory_name, root_name)
+            directory_path = os.path.join(root, directory_name)
+            send_folder_relative_path(directory_path)
             # add the folder to the list of fies and folders
-            files_and_folders.append(os.path.join(root, directory_name))
+            files_and_folders.append(directory_path)
         # only files
         for file_name in files:
             file_path = os.path.join(root, file_name)
-            send_file(file_name, file_path, root_name)
+            send_file(file_name, file_path)
             # add the file to the list of fies and folders
             files_and_folders.append(file_path)
 
@@ -107,22 +143,34 @@ def send_length(data):
     socket_client.send(length.to_bytes(8, sys.byteorder))
 
 
-def send_folder_name(folder_name, mother_folder):
+def send_folder_relative_path(folder_path):
     # send 2 to server- means that we send a folder in current
     socket_client.send(bytes("2", 'UTF-8'))
-    # send size of name file and the name of file
-    send_name(folder_name)
-    # where the server makes the folder ??
-    send_name(mother_folder)
+    # send to server the relative path
+    send_relative_path(folder_path)
 
 
-def send_file(file_name, file_path, mother_folder):
+def send_relative_path(path):
+    relative_path = os.path.relpath(path, global_path)
+    mother_path, name = os.path.split(relative_path)
+    list_split_path = [name]
+    while mother_path != "":
+        mother_path, name = os.path.split(mother_path)
+        list_split_path.append(name)
+    list_split_path.reverse()
+    # send the size of the split objects in the relative path to server
+    socket_client.send(len(list_split_path).to_bytes(8, sys.byteorder))
+    for name in list_split_path:
+        send_name(name)
+
+
+def send_file(file_name, file_path):
     # send 1 to server- means that we send a file
     socket_client.send(bytes("1", 'UTF-8'))
     # send file name
     send_name(file_name)
-    # send where the file belongs
-    send_name(mother_folder)
+    # send the server the relative path
+    send_relative_path(file_path)
     # send the size of the file
     send_length(file_path)
     # start send the data that in the file
@@ -135,16 +183,26 @@ def send_file(file_name, file_path, mother_folder):
     file.close()
 
 
-def send_file_to_remove_or_moved(file_name, file_path, mother_folder):
+def send_file_to_remove_or_moved(file_name, file_path):
     # send 1 to server- means that we send a file
     socket_client.send(bytes("1", 'UTF-8'))
     # send file name
     send_name(file_name)
-    # send where the file belongs
-    send_name(mother_folder)
+    # send where the file belongs (the relative path)
+    send_relative_path(file_path)
 
 
-def track_data(path, timer, identifier):
+def get_full_path():
+    new_path = global_path
+    iterations = int.from_bytes(socket_client.recv(8), sys.byteorder)
+    for i in range(iterations):
+        path_part = get_name()
+        new_path = os.path.join(new_path, path_part)
+    return new_path
+
+
+def track_data(path, timer):
+    global socket_client
     # initial the event handler
     patterns = ["*"]
     ignore_patterns = None
@@ -165,61 +223,76 @@ def track_data(path, timer, identifier):
         while True:
             # sleep to some time
             time.sleep(int(timer))
+            # create socket with TCP protocol
+            socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # connect to server (SYN) and get identifier
+            socket_client.connect((global_ip, global_port))
+            # send the server the id
+            socket_client.send(bytes(global_identifier, 'UTF-8'))
+            # send the server out seq number
+            socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
             # send 4 to server- means that we waked up and we want to pull changes
-            # socket_client.send(bytes("4", 'UTF-8'))
-            # while True:
-            #     option = str(socket_client.recv(1), 'UTF-8')
-            #     # no more changes
-            #     if option == "0":
-            #         break
-            #     # created new folder/file
-            #     elif option == "6":
-            #         option = str(socket_client.recv(1), 'UTF-8')
-            #         # file
-            #         if option == "1":
-            #             create_new_file(socket_client)
-            #         # create new folder
-            #         elif option == "2":
-            #             create_new_folder(socket_client)
-            #     # file/folder has been deleted
-            #     elif option == "7":
-            #         option = str(socket_client.recv(1), 'UTF-8')
-            #         # delete file
-            #         if option == "1":
-            #             delete_file(socket_client)
-            #         # delete folder
-            #         elif option == "2":
-            #             delete_folder(socket_client)
-            #     # file/folder has been modified
-            #     elif option == "8":
-            #         option = str(socket_client.recv(1), 'UTF-8')
-            #         # modify folder - rename folder name
-            #         if option == "2":
-            #             rename_folder_name(socket_client)
-            #     # file/folder has been moved
-            #     elif option == "9":
-            #         option = str(socket_client.recv(1), 'UTF-8')
-            #         # move file
-            #         if option == "1":
-            #             move_file(socket_client)
-            #         # move folder
-            #         elif option == "2":
-            #             move_folder(socket_client)
+            socket_client.send(bytes("4", 'UTF-8'))
+            while True:
+                option = str(socket_client.recv(1), 'UTF-8')
+                # no more changes
+                if option == "0":
+                    # end of talk with server
+                    break
+                # created new folder/file
+                elif option == "6":
+                    option = str(socket_client.recv(1), 'UTF-8')
+                    # file
+                    if option == "1":
+                        create_new_file()
+                    # create new folder
+                    elif option == "2":
+                        create_new_folder()
+                # file/folder has been deleted
+                elif option == "7":
+                    option = str(socket_client.recv(1), 'UTF-8')
+                    # delete file
+                    if option == "1":
+                        delete_file()
+                    # delete folder
+                    elif option == "2":
+                        delete_folder()
+                # file/folder has been moved
+                elif option == "8":
+                    option = str(socket_client.recv(1), 'UTF-8')
+                    # move file
+                    if option == "1":
+                        move_file()
+                    # move folder
+                    elif option == "2":
+                        move_folder()
+                # file/folder has been modified
+                elif option == "9":
+                    option = str(socket_client.recv(1), 'UTF-8')
+                    # modify folder - rename file name
+                    if option == "1":
+                        rename_file_name()
+                    # modify folder - rename folder name
+                    elif option == "2":
+                        rename_folder_name()
+            socket_client.close()
 
     except KeyboardInterrupt:
         my_observer.stop()
-        # send 0 to server- means that we want to stop monitor
-        socket_client.send(bytes("0", 'UTF-8'))
+        socket_client.close()
     my_observer.join()
 
 
 def create_new_file():
+    print("creating new file")
     # name of a new file
     file_name = get_name()
-    # where to create new file ?
-    file_mother_path = get_mother_path(files_and_folders)
+    # the path of the new file (where to create)
+    new_path = get_full_path()
+    if os.path.exists(new_path):
+        return
     # write
-    file_to_write = open(os.path.join(file_mother_path, file_name), "wb")
+    file_to_write = open(new_path, "wb")
     # getting the size of file
     file_len = int.from_bytes(socket_client.recv(8), sys.byteorder)
     counter = file_len
@@ -240,31 +313,27 @@ def create_new_file():
             file = socket_client.recv(BYTES_TO_READ)
     print("Download Completed")
     file_to_write.close()
-    files_and_folders.append(os.path.join(file_mother_path, file_name))
+    files_and_folders.append(new_path)
 
 
 def create_new_folder():
-    # name of the new dir
-    new_dir_name = get_name()
-    # where the new dir needs to be
-    dir_mother_dir = get_name()
-    # the path to mother
-    mother_path = get_dir_path(files_and_folders, dir_mother_dir)
-    new_path = os.path.join(mother_path, new_dir_name)
+    print("create new folder")
+    # the path of the new folder (where to create)
+    new_path = get_full_path()
+    if os.path.exists(new_path):
+        return
     os.mkdir(new_path)
     # adding the new folder to the list
     files_and_folders.append(new_path)
 
 
 def delete_file():
-    # name of the file to delete
+    # name of a new file
     file_name = get_name()
-    # where the new dir needs to be
-    dir_mother_file = get_name()
-    # the path to mother
-    mother_path = get_dir_path(files_and_folders, dir_mother_file)
-    # path to remove
-    path_to_remove = os.path.join(mother_path, file_name)
+    # the path of the file
+    path_to_remove = get_full_path()
+    if not os.path.exists(path_to_remove):
+        return
     # remove the file
     if os.path.exists(path_to_remove):
         os.remove(path_to_remove)
@@ -272,69 +341,74 @@ def delete_file():
 
 
 def delete_folder():
-    # name of the dir to delete
-    dir_name = get_name()
-    # where the new dir needs to be
-    dir_mother_dir = get_name()
-    # the path to mother
-    mother_path = get_dir_path(files_and_folders, dir_mother_dir)
-    # path to remove
-    path_to_remove = os.path.join(mother_path, dir_name)
+    # the path of the folder
+    path_to_remove = get_full_path()
+    if not os.path.exists(path_to_remove):
+        return
+    # initial list - the paths to delete at the end of the function (the init files and folders in this path)
+    to_delete = []
+    print(path_to_remove)
     # delete the files and folders that in the folder
     for root, dirs, files in os.walk(path_to_remove, topdown=False):
         for name in files:
             os.remove(os.path.join(root, name))
-            files_and_folders.remove(os.path.join(root, name))
+            to_delete.append(os.path.join(root, name))
         for name in dirs:
             os.rmdir(os.path.join(root, name))
-            files_and_folders.remove(os.path.join(root, name))
+            to_delete.append(os.path.join(root, name))
     # remove the folder
     os.rmdir(path_to_remove)
+    print(files_and_folders)
     # remove the folder from the list
     files_and_folders.remove(path_to_remove)
+    # remove the init files and folders from the list
+    for path in to_delete:
+        files_and_folders.remove(path)
 
 
-def rename_folder_name():
-    # name of the dir to rename
-    dir_old_name = get_name()
-    # where the dir is exist
-    dir_mother_dir = get_name()
-    # name of the new name dir
-    dir_new_name = get_name()
-    # where the dir needs to be
-    dir_mother_dir2 = get_name()
-    # the path to mother
-    mother_path = get_dir_path(files_and_folders, dir_mother_dir)
-    # path to the folder that we need to rename
-    path_to_rename = os.path.join(mother_path, dir_old_name)
-    # path to the new folder name
-    new_path = os.path.join(mother_path, dir_new_name)
+def rename_file_name():
+    # save the old path
+    old_path = get_full_path()
+    # save the new path
+    new_path = get_full_path()
+    # if the new path is already exist
+    if os.path.exists(new_path):
+        return
     # rename the folder
-    os.rename(path_to_rename, new_path)
-    # path to the new folder
-    new_path = os.path.join(mother_path, dir_new_name)
+    os.rename(old_path, new_path)
     # remove the oldest folder and add the new folder, from the list of folders
-    files_and_folders.remove(path_to_rename)
+    files_and_folders.remove(old_path)
     files_and_folders.append(new_path)
 
 
-def move_file(directories):
-    # name of the file to move
+def rename_folder_name():
+    # save the old path
+    old_path = get_full_path()
+    # save the new path
+    new_path = get_full_path()
+    # if the new path is already exist
+    if os.path.exists(new_path):
+        return
+    to_rename_path = os.listdir(old_path)
+    for item in to_rename_path:
+        files_and_folders.remove(os.path.join(old_path, item))
+        files_and_folders.append(os.path.join(new_path, item))
+    files_and_folders.remove(old_path)
+    files_and_folders.append(new_path)
+    os.rename(old_path, new_path)
+
+
+def move_file():
+    # name of a new file
     file_name = get_name()
-    # where the file is now
-    old_dir_mother_file = get_name()
-    # path to to dir where the file is now
-    old_mother_path = get_dir_path(directories, old_dir_mother_file)
-    # path to the old path of the file
-    old_path = os.path.join(old_mother_path, file_name)
-    # name of the file to move
-    file_name2 = get_name()
-    # where the file need to be- name of the new dir
-    new_dir_mother_file = get_name()
-    # path to the new dir where the file need to be
-    new_mother_path = get_dir_path(files_and_folders, new_dir_mother_file)
-    # path to the new place that the file need to be
-    new_path = os.path.join(new_mother_path, file_name2)
+    # the path of the file
+    old_path = get_full_path()
+    # name of a new file
+    file_name = get_name()
+    # the path of the file
+    new_path = get_full_path()
+    print(old_path)
+    print(new_path)
     # replace - put the file in the new path and remove from the oldest
     os.replace(old_path, new_path)
     files_and_folders.remove(old_path)
@@ -342,37 +416,12 @@ def move_file(directories):
 
 
 def move_folder():
-    # name of the folder to move
-    folder_name = get_name()
-    # where the folder is now
-    old_dir_mother_folder = get_name()
-    # path to to dir where the folder is now
-    old_mother_path = get_dir_path(files_and_folders, old_dir_mother_folder)
-    # path to the old path of the folder
-    old_path = os.path.join(old_mother_path, folder_name)
-    # name of the folder to move
-    folder_name2 = get_name()
-    # where the file need to be- name of the new dir
-    new_dir_mother_folder = get_name()
-    # path to the new dir where the folder need to be
-    new_mother_path = get_dir_path(files_and_folders, new_dir_mother_folder)
-    # path to the new place that the folder need to be
-    new_path = os.path.join(new_mother_path, folder_name2)
+    # save the old path
+    old_path = get_full_path()
+    # save the new path
+    new_path = get_full_path()
     # replace - put the whole files in the new path
     os.mkdir(new_path)
-    #
-    # # move the files and folders
-    # #create the folders
-    # for root, dirs, files in os.walk(old_path, topdown=True):
-    #     for name in files:
-    #         os.remove(os.path.join(root, name))
-    #         files_and_folders.remove(os.path.join(root, name))
-    #     for name in dirs:
-    #         os.rmdir(os.path.join(root, name))
-    #         files_and_folders.remove(os.path.join(root, name))
-
-
-
     # save all paths to files and dirs in the old path
     files = os.listdir(old_path)
     # scan the files and dirs,  and move them from the old path to the new path
@@ -389,114 +438,152 @@ def move_folder():
 
 
 def on_created(event):
+    global socket_client
+    print(f"hey, {event.src_path} has been created!")
     # get the path of the event that created
     path = event.src_path
-    files_and_folders.append(path)
-    # get the file/folder name and the mother path
-    mother_path, name = os.path.split(path)
-    # get mother folder name
-    _, mother_name = os.path.split(mother_path)
-    # if this an temporary file
-    if name.endswith('swp'):
+    # if the file or folder is already exist
+    if path in files_and_folders:
         return
-    # if this is outputstream file
-    # if path.contains('.goutputstream'):
-    #     return
+    # get the file/folder name
+    _, name = os.path.split(path)
+    # if this an temporary file - do not create
+    if path.endswith('swp'):
+        return
+    # if this is outputstream file - do not create
     if '.goutputstream' in path:
         return
-    print(f"hey, {event.src_path} has been created!")
+    files_and_folders.append(path)
+    # create socket with TCP protocol
+    socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # connect to server (SYN)
+    socket_client.connect((global_ip, global_port))
+    # send the server the id
+    socket_client.send(bytes(global_identifier, 'UTF-8'))
+    # send the server out seq number
+    socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
     # send 5 to server- means that we have an update to send to him
     socket_client.send(bytes("5", 'UTF-8'))
     # send 6 to server- means that the update is file/folder that has been created
     socket_client.send(bytes("6", 'UTF-8'))
-    if os.path.isfile(path):
-        send_file(name, path, mother_name)
+    if not event.is_directory:
+        send_file(name, path)
     else:
-        send_folder_name(name, mother_name)
+        send_folder_relative_path(path)
+    # send 0 to server- means that we ended this connection
+    socket_client.send(bytes("0", 'UTF-8'))
+    socket_client.close()
 
 
 def on_deleted(event):
+    global socket_client
+    print(f"what the f**k! Someone deleted {event.src_path}!")
     # get the path of the event that deleted
     path = event.src_path
-    # delete from list of files and folders
-    files_and_folders.remove(path)
     # get the file/folder name and the mother path
-    mother_path, name = os.path.split(path)
-    # get mother folder name
-    _, mother_name = os.path.split(mother_path)
+    _, name = os.path.split(path)
+    # if the path has already deleted
+    if path not in files_and_folders:
+        return
+    # if this is a temporary file
     if name.endswith('.swp'):
         return
-    print(f"what the f**k! Someone deleted {event.src_path}!")
+    # delete from list of files and folders
+    files_and_folders.remove(path)
+    # create socket with TCP protocol
+    socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # connect to server (SYN)
+    socket_client.connect((global_ip, global_port))
+    # send the server the id
+    socket_client.send(bytes(global_identifier, 'UTF-8'))
+    # send the server out seq number
+    socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
     # send 5 to server- means that we have an update to send to him
     socket_client.send(bytes("5", 'UTF-8'))
     # send 7 to server- means that the update is file/folder that has been deleted
     socket_client.send(bytes("7", 'UTF-8'))
-    if os.path.isfile(path):
+    if not event.is_directory:
         # delete file
-        send_file_to_remove_or_moved(name, path, mother_name)
+        send_file_to_remove_or_moved(name, path)
     else:
         # delete folder
-        send_folder_name(name, mother_name)
+        send_folder_relative_path(path)
+    # send 0 to server- means that we ended this connection
+    socket_client.send(bytes("0", 'UTF-8'))
+    socket_client.close()
 
 
 def on_modified(event):
     print(f"hey buddy, {event.src_path} has been modified")
-    # # send 5 to server- means that we have an update to send to him
-    # socket_client.send(bytes("5", 'UTF-8'))
-    # # send 8 to server- means that the update is file/folder that has been modified
-    # socket_client.send(bytes("8", 'UTF-8'))
-    # # check if folder. if folder- send so she can rename. else, send delete and than create
 
 
 def on_moved(event):
+    global socket_client
     print(f"ok ok ok, someone moved {event.src_path} to {event.dest_path}")
     # get the old path of the event that moved
     old_path = event.src_path
-    # get the file/folder name and the old mother path
-    old_mother_path, name = os.path.split(old_path)
-    # get old mother folder name
-    _, old_mother_name = os.path.split(old_mother_path)
+    # get the file/folder name of the source
+    _, old_name = os.path.split(old_path)
     # get the new path of the event that moved
     new_path = event.dest_path
-    # get the file/folder name and the new mother path
-    new_mother_path, name2 = os.path.split(new_path)
-    # get mother folder name
-    _, new_mother_name = os.path.split(new_mother_path)
+    # get the file/folder name of the destination
+    _, new_name = os.path.split(new_path)
 
     # if this is outputstream file
-    #if old_path.contains('.goutputstream'):
     if '.goutputstream' in old_path:
+        # create socket with TCP protocol
+        socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # connect to server (SYN)
+        socket_client.connect((global_ip, global_port))
+        # send the server the id
+        socket_client.send(bytes(global_identifier, 'UTF-8'))
+        # send the server out seq number
+        socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
         # send 5 to server- means that we have an update to send to him
         socket_client.send(bytes("5", 'UTF-8'))
         # send 7 to server- means that the update is file/folder that has been deleted
         socket_client.send(bytes("7", 'UTF-8'))
-        send_file_to_remove_or_moved(name, new_path, new_mother_name)
+        send_file_to_remove_or_moved(new_name, new_path)
         # send 5 to server- means that we have an update to send to him
         socket_client.send(bytes("5", 'UTF-8'))
         # send 6 to server- means that the update is file/folder that has been created
         socket_client.send(bytes("6", 'UTF-8'))
-        send_file(name, new_path, new_mother_name)
+        send_file(new_name, new_path)
+        # send 0 to server- means that we ended this connection
+        socket_client.send(bytes("0", 'UTF-8'))
+        socket_client.close()
+        return
+
+    # if the new_path is already exist: out
+    if new_path in files_and_folders and old_path not in files_and_folders:
         return
 
     # if the folder/file has moved from outside
     if not (old_path in files_and_folders):
+        # create socket with TCP protocol
+        socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # connect to server (SYN)
+        socket_client.connect((global_ip, global_port))
+        # send the server the id
+        socket_client.send(bytes(global_identifier, 'UTF-8'))
+        # send the server out seq number
+        socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
         # send 5 to server- means that we have an update to send to him
         socket_client.send(bytes("5", 'UTF-8'))
         # send 6 to server- means that the update is file/folder that has been created
         socket_client.send(bytes("6", 'UTF-8'))
         # send to server the folder/file that has created (moved from outside)
-        send_folder_name(name2, new_mother_name)
+        send_folder_relative_path(new_path)
         for root, dirs, files in os.walk(new_path, topdown=True):
             # add the root to the list of fies and folders
             files_and_folders.append(root)
-            root_name = os.path.basename(root)
             # only sub-directories
             for directory_name in dirs:
                 # send 5 to server- means that we have an update to send to him
                 socket_client.send(bytes("5", 'UTF-8'))
                 # send 6 to server- means that the update is file/folder that has been created
                 socket_client.send(bytes("6", 'UTF-8'))
-                send_folder_name(directory_name, root_name)
+                send_folder_relative_path(directory_name)
                 # add the folder to the list of fies and folders
                 files_and_folders.append(os.path.join(root, directory_name))
             # only files
@@ -506,48 +593,50 @@ def on_moved(event):
                 # send 6 to server- means that the update is file/folder that has been created
                 socket_client.send(bytes("6", 'UTF-8'))
                 file_path = os.path.join(root, file_name)
-                send_file(file_name, file_path, root_name)
+                send_file(file_name, file_path)
                 # add the file to the list of fies and folders
                 files_and_folders.append(file_path)
+        # send 0 to server- means that we ended this connection
+        socket_client.send(bytes("0", 'UTF-8'))
+        socket_client.close()
         return
     # file/folder has moved from inside. already exist in the server
+    # create socket with TCP protocol
+    socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # connect to server (SYN)
+    socket_client.connect((global_ip, global_port))
+    # send the server the id
+    socket_client.send(bytes(global_identifier, 'UTF-8'))
+    # send the server out seq number
+    socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
     # send 5 to server- means that we have an update to send to him
     socket_client.send(bytes("5", 'UTF-8'))
     # send 9 to server- means that the update is file/folder that has been moved
-    socket_client.send(bytes("9", 'UTF-8'))
-
-    if os.path.isfile(new_path):
+    socket_client.send(bytes("8", 'UTF-8'))
+    if not event.is_directory:
         # file
-        send_file_to_remove_or_moved(name, old_path, old_mother_name)
+        send_file_to_remove_or_moved(old_name, old_path)
         files_and_folders.remove(old_path)
         files_and_folders.append(new_path)
-        send_file_to_remove_or_moved(name2, new_path, new_mother_name)
+        send_file_to_remove_or_moved(new_name, new_path)
     else:
         # folder
-        send_folder_name(name, old_mother_name)
+        send_folder_relative_path(old_path)
         files_and_folders.remove(old_path)
         files_and_folders.append(new_path)
-        send_folder_name(name2, new_mother_name)
+        send_folder_relative_path(new_path)
+    # send 0 to server- means that we ended this connection
+    socket_client.send(bytes("0", 'UTF-8'))
+    socket_client.close()
 
 
 def get_name():
+    print("name:")
     length = int.from_bytes(socket_client.recv(8), sys.byteorder)
-    return str(socket_client.recv(length), 'UTF-8')
-
-
-def get_mother_path(directories):
-    mother = get_name()
-    return get_dir_path(directories, mother)
-
-
-def get_dir_path(directories, wanted_dir):
-    for i in range(len(directories)):
-        tokens = os.path.split(directories[i])
-        if tokens[-1] == wanted_dir:
-            # return path to desired directory
-            return directories[i]
-
-    return directories[0]
+    print(length)
+    name = str(socket_client.recv(length), 'UTF-8')
+    print(name)
+    return name
 
 
 def check_arguments(arr):
