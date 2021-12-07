@@ -24,8 +24,8 @@ clients = {}
 #                  this dictionary has: KEY = sequence number
 #                                       VALUE = A list of changes that this computer needs to get updated.
 
-global directories
-directories = {}
+global files_and_folders
+files_and_folders = {}
 # directories dictionary.
 # Each element has: KEY = identifier
 #                   VALUE = list of all paths of client's directory, starting with his base folder.
@@ -33,10 +33,9 @@ directories = {}
 global current_client_identifier
 
 
-
 def serve_clients(port):
     global current_client_identifier
-    global directories
+    global files_and_folders
     global clients
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -45,7 +44,6 @@ def serve_clients(port):
 
     while True:
         client_socket, client_address = s.accept()
-        print("New client connected.")
         data = client_socket.recv(CHARACTERS)
         # get ID
         str_data = str(data, 'UTF-8')
@@ -53,15 +51,12 @@ def serve_clients(port):
         if str_data == NEW_ID:
             seq_num = new_client(client_socket)
             clone(client_socket)
-            print("done cloning")
         else:
             current_client_identifier = str_data
-            print("existing id: " + str_data)
             seq_num = existing_client(client_socket)
 
         # anyways - track data
         track_data(client_socket, seq_num)
-        print("Client disconnected.")
 
 
 
@@ -70,13 +65,12 @@ New client
 '''
 def new_client(client_socket):
     global current_client_identifier
-    global directories
+    global files_and_folders
     global clients
 
     # new client - create random identifier, clone and then track
     identifier = create_id()
     current_client_identifier = identifier
-    print("new id: " + identifier)
     client_socket.send(bytes(identifier, 'UTF-8'))
 
     # the client is new. this is clearly his first computer. thus, seq_num = 1
@@ -93,7 +87,7 @@ def new_client(client_socket):
 
     # base dir of client
     client_dir_paths = [client_path]
-    directories[identifier] = client_dir_paths
+    files_and_folders[identifier] = client_dir_paths
 
     return seq_num
 
@@ -103,11 +97,10 @@ Old client
 '''
 def existing_client(client_socket):
     global current_client_identifier
-    global directories
+    global files_and_folders
     global clients
 
     seq_num = int.from_bytes(client_socket.recv(8), sys.byteorder)
-    print("existing client sent: " + str(seq_num) + " as seq_num")
 
     # the computer is not new. we return to track
     if seq_num != 0:
@@ -116,8 +109,6 @@ def existing_client(client_socket):
     # the computer is new - the sequence number of this new computer is the next one available
     client_computers = clients[current_client_identifier]
     new_seq_num = len(client_computers) + 1
-
-    print("new seq num for existing client: " + str(new_seq_num))
 
     # send the client his new sequence number
     client_socket.send(new_seq_num.to_bytes(8, sys.byteorder))
@@ -149,18 +140,20 @@ def get_name(client_socket):
 
 
 def get_full_path(client_socket):
-    new_path = directories[current_client_identifier][0]
+    new_path = files_and_folders[current_client_identifier][0]
     iterations = int.from_bytes(client_socket.recv(8), sys.byteorder)
 
     for i in range(iterations):
         path_part = get_name(client_socket)
         new_path = os.path.join(new_path, path_part)
 
-    return new_path
+    norm_path = os.path.normpath(new_path)
+    print("norm path: " + norm_path)
+    return norm_path
+
 
 def send_full_path(client_socket, path):
-    relative_path = os.path.relpath(path, directories[current_client_identifier][0])
-    print("rp: " + relative_path)
+    relative_path = os.path.relpath(path, files_and_folders[current_client_identifier][0])
     mother_path, name = os.path.split(relative_path)
     list_split_path = [name]
     while mother_path != "":
@@ -175,8 +168,8 @@ def send_full_path(client_socket, path):
 
 
 def send_data(client_socket):
-    global directories
-    for root, dirs, files in os.walk(directories[current_client_identifier][0]):
+    global files_and_folders
+    for root, dirs, files in os.walk(files_and_folders[current_client_identifier][0]):
         # only sub-directories
         for directory_name in dirs:
             directory_path = os.path.join(root, directory_name)
@@ -193,7 +186,7 @@ def send_data(client_socket):
 
 def clone(client_socket):
     while True:
-        option = str(client_socket.recv(1), 'UTF-8')
+        option = client_socket.recv(1).decode("utf-8", "ignore")
 
         # no more
         if option == "0":
@@ -207,14 +200,15 @@ def clone(client_socket):
         elif option == "2":
             # where the new dir needs to be
             full_path = get_full_path(client_socket)
-            directories[current_client_identifier].append(full_path)
+            files_and_folders[current_client_identifier].append(full_path)
             os.mkdir(full_path)
             # adding the new folder to the list
 
 
+
 def track_data(client_socket, seq_num):
     print("tracking...")
-    option = str(client_socket.recv(1), 'UTF-8')
+    option = client_socket.recv(1).decode("utf-8", "ignore")
 
     # Client woke up and needs to be notified on changes
     if option == "4":
@@ -228,7 +222,7 @@ def track_data(client_socket, seq_num):
             print("watchdog")
             create_change(client_socket,change_type, seq_num)
             change_type = client_socket.recv(1).decode("utf-8", "ignore")
-            #change_type = str(client_socket.recv(1), 'UTF-8')
+            # change_type = str(client_socket.recv(1), 'UTF-8')
 
 
 def create_file(client_socket):
@@ -261,13 +255,13 @@ def create_file(client_socket):
         else:
             file = client_socket.recv(BYTES_TO_READ)
     file_to_write.close()
-    directories[current_client_identifier].append(file_full_path)
+    files_and_folders[current_client_identifier].append(file_full_path)
     return file_full_path
 
 
 def remove_dir(path_to_remove):
     to_delete = []
-    if path_to_remove != directories[current_client_identifier][0]:
+    if path_to_remove != files_and_folders[current_client_identifier][0]:
         to_delete.append(path_to_remove)
 
     for root, dirs, files in os.walk(path_to_remove, topdown=False):
@@ -279,89 +273,71 @@ def remove_dir(path_to_remove):
             to_delete.append(os.path.join(root, name))
     os.rmdir(path_to_remove)
 
-
     for path in to_delete:
-        directories[current_client_identifier].remove(path)
-
-
-# CHANGE = (change type, is_dir, relevant_full_path, old_full_path)
-#               0          1              2                3
-# client_path = os.path.join(SERVER_PATH, client_identifier)
+        files_and_folders[current_client_identifier].remove(path)
 
 
 def create_change(client_socket,change_type, seq_num):
-    print("creating a change")
+    print("creating a change, seq num is " + str(seq_num))
     # creating a change
     change = (change_type, )
 
     # CREATE
     if change_type == "6":
         # 1 (file), 2 (folder)
-        file_or_folder = str(client_socket.recv(1), 'UTF-8')
+        file_or_folder = client_socket.recv(1).decode("utf-8", "ignore")
 
         # create FILE
         if file_or_folder == "1":
-            print("create file")
             new_path = create_file(client_socket)
             if not new_path:
                 return
             change = change + (file_or_folder, new_path)
             add_change(seq_num, change)
-            print("done creating a file")
 
         # create FOLDER
         else:
-            print("create dir")
             new_path = get_full_path(client_socket)
             if os.path.exists(new_path):
                 return
-            directories[current_client_identifier].append(new_path)
+            files_and_folders[current_client_identifier].append(new_path)
             os.mkdir(new_path)
             change = change + (file_or_folder, new_path)
             add_change(seq_num, change)
-            print("done creating a folder")
 
     # DELETE
     elif change_type == "7":
         # 1 (file), 2 (folder)
-        file_or_folder = str(client_socket.recv(1), 'UTF-8')
-
-        # # making a copy because we delete
-        # directories_copy = directories[current_client_identifier].copy()
+        file_or_folder = client_socket.recv(1).decode("utf-8", "ignore")
 
         # delete FILE
         if file_or_folder == "1":
-            print("delete file")
             _ = get_name(client_socket)
             path = get_full_path(client_socket)
-            directories[current_client_identifier].remove(path)
+
+            # if the server got a path that is no longer watched, we return
+            if path not in files_and_folders:
+                return
+            files_and_folders[current_client_identifier].remove(path)
             os.remove(path)
             change = change + (file_or_folder, path)
             add_change(seq_num, change)
 
-            # for i in range(len(directories_copy)):
-            #     _, directory = os.path.split(directories_copy[i])
-            #     if directory == file_name:
-            #         path_to_remove = directories_copy[i]
-            #         directories[current_client_identifier].remove(path_to_remove)
-            #         os.remove(path_to_remove)
-            #         change = change + (file_or_folder, path_to_remove, mother_name, data_name)
-
-            print("file deleted")
-
         # delete FOLDER
         else:
             path = get_full_path(client_socket)
-            print("delete dir")
+            #
+            # # if the server got a path that is no longer watched, we return
+            # if path not in files_and_folders:
+            #     return
             remove_dir(path)
             change = change + (file_or_folder, path)
             add_change(seq_num, change)
-            print("folder deleted")
 
     # MOVE
     elif change_type == "8":
         # 1 (file), 2 (folder)
-        file_or_folder = str(client_socket.recv(1), 'UTF-8')
+        file_or_folder = client_socket.recv(1).decode("utf-8", "ignore")
 
         if file_or_folder == "1":
             # old data
@@ -378,8 +354,8 @@ def create_change(client_socket,change_type, seq_num):
             # deal the case that it's not a move, but a name change of file
             if old_mother == new_mother:
                 os.rename(old_path, new_path)
-                directories[current_client_identifier].remove(old_path)
-                directories[current_client_identifier].append(new_path)
+                files_and_folders[current_client_identifier].remove(old_path)
+                files_and_folders[current_client_identifier].append(new_path)
                 # change type "9" of renaming
                 change = ("9", file_or_folder, new_path, old_path)
                 add_change(seq_num, change)
@@ -387,16 +363,16 @@ def create_change(client_socket,change_type, seq_num):
 
             # if the old path doesn't exist and the new path does exist we update "directories"
             if (not os.path.exists(old_path)) and (os.path.exists(new_path)):
-                if old_path in directories[current_client_identifier]:
-                    directories[current_client_identifier].remove(old_path)
-                if not new_path in directories[current_client_identifier]:
-                    directories[current_client_identifier].append(new_path)
+                if old_path in files_and_folders[current_client_identifier]:
+                    files_and_folders[current_client_identifier].remove(old_path)
+                if not new_path in files_and_folders[current_client_identifier]:
+                    files_and_folders[current_client_identifier].append(new_path)
                 return
 
             # if we didn't return until now - it's a location replace
             os.replace(old_path, new_path)
-            directories[current_client_identifier].remove(old_path)
-            directories[current_client_identifier].append(new_path)
+            files_and_folders[current_client_identifier].remove(old_path)
+            files_and_folders[current_client_identifier].append(new_path)
             change = change + (file_or_folder, new_path, old_path)
             add_change(seq_num, change)
 
@@ -411,49 +387,71 @@ def create_change(client_socket,change_type, seq_num):
             old_mother, _ = os.path.split(old_path)
             new_mother, _ = os.path.split(new_path)
 
-            # TODO rename not just to mother
             # deal the case that it's not a move, but a name change of folder
             if old_mother == new_mother:
-                files = os.listdir(old_path)
-                for file in files:
-                    directories[current_client_identifier].remove(os.path.join(old_path, file))
-                    directories[current_client_identifier].append(os.path.join(new_path, file))
-                directories[current_client_identifier].remove(old_path)
-                directories[current_client_identifier].append(new_path)
+                for root, dirs, files in os.walk(old_path, topdown=True):
+                    for name in dirs:
+                        relative_path = os.path.relpath(os.path.join(root, name), old_path)
+                        files_and_folders[current_client_identifier].remove(os.path.join(old_path, relative_path))
+                    for name in files:
+                        relative_path = os.path.relpath(os.path.join(root, name), old_path)
+                        files_and_folders[current_client_identifier].remove(os.path.join(old_path, relative_path))
+
+                os.rename(old_path, new_path)
+
+                for root, dirs, files in os.walk(new_path, topdown=True):
+                    for name in dirs:
+                        relative_path = os.path.relpath(os.path.join(root, name), new_path)
+                        files_and_folders[current_client_identifier].append(os.path.join(new_path, relative_path))
+                    for name in files:
+                        relative_path = os.path.relpath(os.path.join(root, name), new_path)
+                        files_and_folders[current_client_identifier].append(os.path.join(new_path, relative_path))
+                files_and_folders[current_client_identifier].remove(old_path)
+                files_and_folders[current_client_identifier].append(new_path)
                 # change type "9" of renaming
                 change = ("9", file_or_folder, new_path, old_path)
                 add_change(seq_num, change)
-                # change the name of the folder
-                os.rename(old_path, new_path)
                 return
 
-            # if the new path doesn't exist the folder has moved to new location and we need to create it
-            if not os.path.exists(new_path):
-                os.mkdir(new_path)
-                # make a change ONLY for the folder (not it's content)
-                change = change + (file_or_folder, new_path, old_path)
-                add_change(seq_num, change)
+            # if we didn't return by now, it's a move ! first, we create the new folder
+            os.mkdir(new_path)
+            # folders to remove so we don't harm the recursion
+            recursive_folders_to_delete = []
+            for root, dirs, files in os.walk(old_path, topdown=True):
+                for name in dirs:
+                    relative_path = os.path.relpath(os.path.join(root, name), old_path)
+                    # move to the new folder
+                    os.mkdir(os.path.join(new_path, relative_path))
+                    recursive_folders_to_delete.append(os.path.join(old_path, relative_path))
+                    # remove and append from the files_and_folders
+                    files_and_folders[current_client_identifier].append(os.path.join(new_path, relative_path))
+                    files_and_folders[current_client_identifier].remove(os.path.join(old_path, relative_path))
+                for name in files:
+                    relative_path = os.path.relpath(os.path.join(root, name), old_path)
+                    # move to the new folder
+                    os.replace(os.path.join(old_path, relative_path), os.path.join(new_path, relative_path))
+                    # remove and append from the files_and_folders
+                    files_and_folders[current_client_identifier].append(os.path.join(new_path, relative_path))
+                    files_and_folders[current_client_identifier].remove(os.path.join(old_path, relative_path))
 
-            # move all the folder's content and don't inform changes
-            if os.path.exists(old_path):
-                files = os.listdir(old_path)
-                for file in files:
-                    os.replace(os.path.join(old_path, file), os.path.join(new_path, file))
-                    directories[current_client_identifier].remove(os.path.join(old_path, file))
-                    directories[current_client_identifier].append(os.path.join(new_path, file))
-                directories[current_client_identifier].remove(old_path)
-                directories[current_client_identifier].append(new_path)
-                os.rmdir(old_path)
+            files_and_folders[current_client_identifier].remove(old_path)
+            files_and_folders[current_client_identifier].append(new_path)
+            change = ("8", file_or_folder, new_path, old_path)
+            add_change(seq_num, change)
+
+            # delete all init empty folders in reverse ways
+            recursive_folders_to_delete.reverse()
+            for folder in recursive_folders_to_delete:
+                os.rmdir(folder)
+            # finally, we delete the original file that has moved
+            os.rmdir(old_path)
 
 
 def add_change(seq_num, change):
-    print("change: ")
-    print(change)
     # add change to all computers of clients, but the client's ip itself
     for num in clients[current_client_identifier]:
         if num != seq_num:
             clients[current_client_identifier][num].append(change)
-
 
 
 '''
@@ -461,6 +459,7 @@ An existing client has connected and the sever needs to update him about the cha
 in his other computers
 '''
 def update_client(client_socket, seq_num):
+    print("update client number: " + str(seq_num))
     # list of changes. each change is a tuple.
     changes_list = clients[current_client_identifier][seq_num]
 
@@ -541,13 +540,12 @@ def update_move(change, client_socket):
     # FILE
     if file_or_folder == "1":
         _, file_name = os.path.split(full_path)
-        print("file name: " + file_name)
 
         # send old path
         send_file_name(client_socket, file_name)
         send_full_path(client_socket, old_path)
         # send new path
-        send_file_name(client_socket, file_name)
+        send_name(client_socket, file_name)
         send_full_path(client_socket, full_path)
 
     # FOLDER
@@ -580,7 +578,6 @@ def update_rename(change, client_socket):
         client_socket.send(bytes("2", 'UTF-8'))
         send_full_path(client_socket, old_path)
         send_full_path(client_socket, full_path)
-
 
 
 def send_name(s, name):
