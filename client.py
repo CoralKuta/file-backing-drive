@@ -1,4 +1,5 @@
 # Noa Eitan 316222777, Coral Kuta 208649186
+
 import os.path
 import socket
 import sys
@@ -19,7 +20,6 @@ NO_SEQUENCE_NUMBER = 0
 
 # list of all files and folders in the path
 global files_and_folders
-# create socket with TCP protocol
 global socket_client
 global global_path
 global global_folder
@@ -27,6 +27,11 @@ global global_identifier
 global global_sequence_number
 global global_ip
 global global_port
+
+
+'''
+function that track the data if we have id
+'''
 
 
 def track_data_with_id(ip, port, path, timer, identifier):
@@ -38,6 +43,7 @@ def track_data_with_id(ip, port, path, timer, identifier):
     global global_sequence_number
     global global_ip
     global global_port
+    # save global variables
     global_ip = ip
     global_port = int(port)
     global_identifier = identifier
@@ -45,14 +51,18 @@ def track_data_with_id(ip, port, path, timer, identifier):
     # create socket with TCP protocol
     socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # save the path to the folder that we want to save and monitor via server
+    path = os.path.normpath(path)
     files_and_folders.append(path)
     global_path = path
     _, global_folder = os.path.split(global_path)
+    # if the client's folder doesn't exist we create it
+    if not os.path.exists(path):
+        os.mkdir(path)
     # connect to server (SYN) - save him the identifier
     socket_client.connect((ip, int(port)))
     # send the identifier to the server
     socket_client.send(bytes(identifier, 'UTF-8'))
-    # send the server that we dont have sequence number now
+    # send the server that we do not have sequence number now
     socket_client.send(NO_SEQUENCE_NUMBER.to_bytes(8, sys.byteorder))
     # save the sequence number of this number
     global_sequence_number = int.from_bytes(socket_client.recv(8), sys.byteorder)
@@ -64,18 +74,28 @@ def track_data_with_id(ip, port, path, timer, identifier):
     track_data(path, timer)
 
 
+'''
+function that pull the data from the server
+'''
+
+
 def pull_data():
     while True:
         option = socket_client.recv(1).decode('UTF-8', "ignore")
-        # no more data to pull
         if option == "0":
+            # no more data to pull
             break
-        # create new file
         elif option == "1":
+            # create new file
             create_new_file()
-        # create new folder
         elif option == "2":
+            # create new folder
             create_new_folder()
+
+
+'''
+function that track the data if we do not have id
+'''
 
 
 def track_data_without_id(ip, port, path, timer):
@@ -87,12 +107,14 @@ def track_data_without_id(ip, port, path, timer):
     global global_sequence_number
     global global_ip
     global global_port
+    # set global variables
     global_ip = ip
     global_port = int(port)
     files_and_folders = []
     # create socket with TCP protocol
     socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # save the path to the folder that we want to save and monitor via server
+    path = os.path.normpath(path)
     files_and_folders.append(path)
     global_path = path
     _, global_folder = os.path.split(global_path)
@@ -102,7 +124,6 @@ def track_data_without_id(ip, port, path, timer):
     id_str = "ID".zfill(SIZE_ID)
     socket_client.send(bytes(id_str, 'UTF-8'))
     identifier = socket_client.recv(SIZE_ID).decode('UTF-8', "ignore")
-    print(identifier)
     global_identifier = identifier
     # save the sequence number of this number
     global_sequence_number = int.from_bytes(socket_client.recv(8), sys.byteorder)
@@ -116,13 +137,18 @@ def track_data_without_id(ip, port, path, timer):
     track_data(path, timer)
 
 
+'''
+function that send to the server the data at the first connect
+'''
+
+
 def send_data_first_time():
     for root, dirs, files in os.walk(global_path):
-        # only sub-directories
+        # only init folders
         for directory_name in dirs:
             directory_path = os.path.join(root, directory_name)
             send_folder_relative_path(directory_path)
-            # add the folder to the list of fies and folders
+            # add the folder to the list of files and folders
             files_and_folders.append(directory_path)
         # only files
         for file_name in files:
@@ -132,15 +158,31 @@ def send_data_first_time():
             files_and_folders.append(file_path)
 
 
+'''
+function that send to the server the length and the name of specific name (in string)
+'''
+
+
 def send_name(name):
-    length = len(name)
+    bytes_name = bytes(name, 'UTF-8')
+    length = len(bytes_name)
     socket_client.send(length.to_bytes(8, sys.byteorder))
-    socket_client.send(bytes(name, 'UTF-8'))
+    socket_client.send(bytes_name)
+
+
+'''
+function that send to the server the length of data
+'''
 
 
 def send_length(data):
     length = os.path.getsize(data)
     socket_client.send(length.to_bytes(8, sys.byteorder))
+
+
+'''
+function that send to the server the relative path of some path of folder
+'''
 
 
 def send_folder_relative_path(folder_path):
@@ -150,7 +192,13 @@ def send_folder_relative_path(folder_path):
     send_relative_path(folder_path)
 
 
+'''
+function that send to the server the relative path of some path
+'''
+
+
 def send_relative_path(path):
+    # calculate the relative path
     relative_path = os.path.relpath(path, global_path)
     mother_path, name = os.path.split(relative_path)
     list_split_path = [name]
@@ -162,6 +210,11 @@ def send_relative_path(path):
     socket_client.send(len(list_split_path).to_bytes(8, sys.byteorder))
     for name in list_split_path:
         send_name(name)
+
+
+'''
+function that send to the server a file
+'''
 
 
 def send_file(file_name, file_path):
@@ -183,6 +236,11 @@ def send_file(file_name, file_path):
     file.close()
 
 
+'''
+function that send to the server a file that has moved or removed
+'''
+
+
 def send_file_to_remove_or_moved(file_name, file_path):
     # send 1 to server- means that we send a file
     socket_client.send(bytes("1", 'UTF-8'))
@@ -192,16 +250,25 @@ def send_file_to_remove_or_moved(file_name, file_path):
     send_relative_path(file_path)
 
 
+'''
+function that get from the server relative path and return full path of file/folder that we need to create/move/delete/
+update/rename
+'''
+
+
 def get_full_path():
     new_path = global_path
     iterations = int.from_bytes(socket_client.recv(8), sys.byteorder)
-    print(iterations)
     for i in range(iterations):
         path_part = get_name()
         new_path = os.path.join(new_path, path_part)
     new_path = os.path.normpath(new_path)
-    print(new_path)
     return new_path
+
+
+'''
+function that truck the data that in the path- using watchdog, and in every X time wake up and ask updates from server
+'''
 
 
 def track_data(path, timer):
@@ -236,48 +303,8 @@ def track_data(path, timer):
             socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
             # send 4 to server- means that we waked up, and we want to pull changes
             socket_client.send(bytes("4", 'UTF-8'))
-            while True:
-                option = socket_client.recv(1).decode('UTF-8', "ignore")
-                # no more changes
-                if option == "0":
-                    # end of talk with server
-                    break
-                # created new folder/file
-                elif option == "6":
-                    option = socket_client.recv(1).decode('UTF-8', "ignore")
-                    # file
-                    if option == "1":
-                        create_new_file()
-                    # create new folder
-                    elif option == "2":
-                        create_new_folder()
-                # file/folder has been deleted
-                elif option == "7":
-                    option = socket_client.recv(1).decode('UTF-8', "ignore")
-                    # delete file
-                    if option == "1":
-                        delete_file()
-                    # delete folder
-                    elif option == "2":
-                        delete_folder()
-                # file/folder has been moved
-                elif option == "8":
-                    option = socket_client.recv(1).decode('UTF-8', "ignore")
-                    # move file
-                    if option == "1":
-                        move_file()
-                    # move folder
-                    elif option == "2":
-                        move_folder()
-                # file/folder has been modified
-                elif option == "9":
-                    option = socket_client.recv(1).decode('UTF-8', "ignore")
-                    # modify folder - rename file name
-                    if option == "1":
-                        rename_file_name()
-                    # modify folder - rename folder name
-                    elif option == "2":
-                        rename_folder_name()
+            # get updates from server
+            get_update_from_server()
             socket_client.close()
 
     except KeyboardInterrupt:
@@ -286,41 +313,136 @@ def track_data(path, timer):
     my_observer.join()
 
 
+'''
+function that get an updates from server
+'''
+
+
+def get_update_from_server():
+    while True:
+        option = socket_client.recv(1).decode('UTF-8', "ignore")
+        # no more changes
+        if option == "0":
+            # end of updated from server
+            break
+        # created new folder/file
+        elif option == "6":
+            option = socket_client.recv(1).decode('UTF-8', "ignore")
+            # create file
+            if option == "1":
+                create_new_file()
+            # create folder
+            elif option == "2":
+                create_new_folder()
+        # file/folder has been deleted
+        elif option == "7":
+            option = socket_client.recv(1).decode('UTF-8', "ignore")
+            # delete file
+            if option == "1":
+                delete_file()
+            # delete folder
+            elif option == "2":
+                delete_folder()
+        # file/folder has been moved
+        elif option == "8":
+            option = socket_client.recv(1).decode('UTF-8', "ignore")
+            # move file
+            if option == "1":
+                move_file()
+            # move folder
+            elif option == "2":
+                move_folder()
+        # file/folder has been modified
+        elif option == "9":
+            option = socket_client.recv(1).decode('UTF-8', "ignore")
+            # modify folder - rename file name
+            if option == "1":
+                rename_file_name()
+            # modify folder - rename folder name
+            elif option == "2":
+                rename_folder_name()
+
+
+'''
+function that create a new file, based the details from the server
+'''
+
+
 def create_new_file():
-    print("creating new file")
     # name of a new file
     file_name = get_name()
     # the path of the new file (where to create)
     new_path = get_full_path()
     if os.path.exists(new_path):
-        return
-    # write
-    file_to_write = open(new_path, "wb")
-    # getting the size of file
-    file_len = int.from_bytes(socket_client.recv(8), sys.byteorder)
-    counter = file_len
-
-    if file_len < BYTES_TO_READ:
-        file = socket_client.recv(file_len)
+        # open the old file
+        file = open(new_path, "rb")
+        # read the old data that in the file
+        part_of_old_data = file.read(BYTES_TO_READ)
+        old_data = part_of_old_data
+        while part_of_old_data:
+            part_of_old_data = file.read(BYTES_TO_READ)
+            old_data += part_of_old_data
+            # finished read, so close the file
+        file.close()
+        # get the length of the file that in the server
+        file_len_new_data = int.from_bytes(socket_client.recv(8), sys.byteorder)
+        # read the data that in the server
+        counter = file_len_new_data
+        if file_len_new_data < BYTES_TO_READ:
+            part_of_new_data = socket_client.recv(file_len_new_data)
+            new_data = part_of_new_data
+        else:
+            part_of_new_data = socket_client.recv(BYTES_TO_READ)
+            new_data = part_of_new_data
+        while part_of_new_data:
+            counter = counter - len(part_of_new_data)
+            if counter <= 0:
+                break
+            elif counter < BYTES_TO_READ:
+                part_of_new_data = socket_client.recv(counter)
+                new_data += part_of_new_data
+            else:
+                part_of_new_data = socket_client.recv(BYTES_TO_READ)
+                new_data += part_of_new_data
+        # check if the old data and the new data the same
+        if old_data == new_data:
+            # they are the same. do not do anything
+            return
+        # not the same, so change the data
+        file = open(new_path, "wb")
+        file.write(new_data)
+        file.close()
     else:
-        file = socket_client.recv(BYTES_TO_READ)
+        # the file does not exist
+        file_to_write = open(new_path, "wb")
+        # getting the size of file
+        file_len = int.from_bytes(socket_client.recv(8), sys.byteorder)
+        counter = file_len
 
-    while file:
-        file_to_write.write(file)
-        counter = counter - len(file)
-        if counter <= 0:
-            break
-        elif counter < BYTES_TO_READ:
-            file = socket_client.recv(counter)
+        if file_len < BYTES_TO_READ:
+            file = socket_client.recv(file_len)
         else:
             file = socket_client.recv(BYTES_TO_READ)
-    print("Download Completed")
-    file_to_write.close()
-    files_and_folders.append(new_path)
+
+        while file:
+            file_to_write.write(file)
+            counter = counter - len(file)
+            if counter <= 0:
+                break
+            elif counter < BYTES_TO_READ:
+                file = socket_client.recv(counter)
+            else:
+                file = socket_client.recv(BYTES_TO_READ)
+        file_to_write.close()
+        files_and_folders.append(new_path)
+
+
+'''
+function that create a new folder, based the details from the server
+'''
 
 
 def create_new_folder():
-    print("create new folder")
     # the path of the new folder (where to create)
     new_path = get_full_path()
     if os.path.exists(new_path):
@@ -330,8 +452,12 @@ def create_new_folder():
     files_and_folders.append(new_path)
 
 
+'''
+function that delete a file, based the details from the server
+'''
+
+
 def delete_file():
-    print("delete file")
     # name of a new file
     file_name = get_name()
     # the path of the file
@@ -341,11 +467,16 @@ def delete_file():
     # remove the file
     if os.path.exists(path_to_remove):
         os.remove(path_to_remove)
+    # remove from files_and_folders
     files_and_folders.remove(path_to_remove)
 
 
+'''
+function that delete a folder, based the details from the server
+'''
+
+
 def delete_folder():
-    print("delete folder")
     # the path of the folder
     path_to_remove = get_full_path()
     if not os.path.exists(path_to_remove):
@@ -369,8 +500,12 @@ def delete_folder():
         files_and_folders.remove(path)
 
 
+'''
+function that rename file name, based the details from the server
+'''
+
+
 def rename_file_name():
-    print("rename file")
     # save the old path
     old_path = get_full_path()
     # save the new path
@@ -385,8 +520,12 @@ def rename_file_name():
     files_and_folders.append(new_path)
 
 
+'''
+function that rename folder name, based the details from the server
+'''
+
+
 def rename_folder_name():
-    print("rename folder")
     # save the old path
     old_path = get_full_path()
     # save the new path
@@ -413,8 +552,12 @@ def rename_folder_name():
             files_and_folders.append(os.path.join(root, name))
 
 
+'''
+function that move a file, based the details from the server
+'''
+
+
 def move_file():
-    print("move file")
     # name of a new file
     file_name = get_name()
     # the path of the file
@@ -423,15 +566,18 @@ def move_file():
     file_name = get_name()
     # the path of the file
     new_path = get_full_path()
-    print(new_path)
     # replace - put the file in the new path and remove from the oldest
     os.replace(old_path, new_path)
     files_and_folders.remove(old_path)
     files_and_folders.append(new_path)
 
 
+'''
+function that move a folder, based the details from the server
+'''
+
+
 def move_folder():
-    print("move folder")
     # save the old path
     old_path = get_full_path()
     # save the new path
@@ -468,9 +614,15 @@ def move_folder():
     files_and_folders.append(new_path)
 
 
+'''
+function that modify the server that we have an updates- file/folder has been created.
+send the server the updates.
+and before it, ask from server updates for us.
+'''
+
+
 def on_created(event):
     global socket_client
-    print(f"hey, {event.src_path} has been created!")
     # get the path of the event that created
     path = event.src_path
     # if the file or folder is already exist
@@ -478,8 +630,8 @@ def on_created(event):
         return
     # get the file/folder name
     _, name = os.path.split(path)
-    # if this an temporary file - do not create
-    if path.endswith('swp'):
+    # if this temporary file - do not create
+    if path.endswith('.swp') or path.endswith('.swp.'):
         return
     # if this is outputstream file - do not create
     if '.goutputstream' in path:
@@ -488,7 +640,6 @@ def on_created(event):
     mother_path, _ = os.path.split(path)
     # if the mother path does not exist- so do not send, because this is an init file/folder
     if mother_path not in files_and_folders:
-        print("it's not an existing folder return")
         return
     # create socket with TCP protocol
     socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -500,6 +651,8 @@ def on_created(event):
     socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
     # send 5 to server- means that we have an update to send to him
     socket_client.send(bytes("5", 'UTF-8'))
+    # get updates from the server
+    get_update_from_server()
     # send 6 to server- means that the update is file/folder that has been created
     socket_client.send(bytes("6", 'UTF-8'))
     if not event.is_directory:
@@ -513,10 +666,8 @@ def on_created(event):
         # add the new path to the files_and_folders
         files_and_folders.append(path)
         for root, dirs, files in os.walk(path, topdown=True):
-            # only sub-directories
+            # only init folders
             for directory_name in dirs:
-                # send 5 to server- means that we have an update to send to him
-                socket_client.send(bytes("5", 'UTF-8'))
                 # send 6 to server- means that the update is file/folder that has been created
                 socket_client.send(bytes("6", 'UTF-8'))
                 send_folder_relative_path(os.path.join(root, directory_name))
@@ -524,8 +675,6 @@ def on_created(event):
                 files_and_folders.append(os.path.join(root, directory_name))
             # only files
             for file_name in files:
-                # send 5 to server- means that we have an update to send to him
-                socket_client.send(bytes("5", 'UTF-8'))
                 # send 6 to server- means that the update is file/folder that has been created
                 socket_client.send(bytes("6", 'UTF-8'))
                 file_path = os.path.join(root, file_name)
@@ -537,9 +686,15 @@ def on_created(event):
     socket_client.close()
 
 
+'''
+function that modify the server that we have an updates- file/folder has been deleted.
+send the server the updates.
+and before it, ask from server updates for us.
+'''
+
+
 def on_deleted(event):
     global socket_client
-    print(f"what the f**k! Someone deleted {event.src_path}!")
     # get the path of the event that deleted
     path = event.src_path
     # get the file/folder name and the mother path
@@ -548,7 +703,7 @@ def on_deleted(event):
     if path not in files_and_folders:
         return
     # if this is a temporary file
-    if name.endswith('.swp'):
+    if name.endswith('.swp') or name.endswith('.swp.'):
         return
     # delete from list of files and folders
     files_and_folders.remove(path)
@@ -562,15 +717,15 @@ def on_deleted(event):
     socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
     # send 5 to server- means that we have an update to send to him
     socket_client.send(bytes("5", 'UTF-8'))
+    # get updates from the server
+    get_update_from_server()
     # send 7 to server- means that the update is file/folder that has been deleted
     socket_client.send(bytes("7", 'UTF-8'))
     if not event.is_directory:
         # delete file
-        print("delete file")
         send_file_to_remove_or_moved(name, path)
     else:
         # delete folder
-        print("delete folder")
         send_folder_relative_path(path)
         # delete from files and folders the init files and folders
         copy_files_and_folders = files_and_folders.copy()
@@ -582,13 +737,54 @@ def on_deleted(event):
     socket_client.close()
 
 
+'''
+function that modify the server that we have an updates- file has been modified.
+send the server the updates.
+and before it, ask from server updates for us.
+'''
+
+
 def on_modified(event):
-    print(f"hey buddy, {event.src_path} has been modified")
+    global socket_client
+    path = event.src_path
+    # get the file/folder name and the mother path
+    _, name = os.path.split(path)
+    # if it's a folder, we return
+    if event.is_directory:
+        return
+    # if this temporary file - do not create
+    if path.endswith('.swp') or path.endswith('.swp.'):
+        return
+    # else, it's a file
+    # create socket with TCP protocol
+    socket_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # connect to server (SYN)
+    socket_client.connect((global_ip, global_port))
+    # send the server the id
+    socket_client.send(bytes(global_identifier, 'UTF-8'))
+    # send the server out seq number
+    socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
+    # send 5 to server- means that we have an update to send to him
+    socket_client.send(bytes("5", 'UTF-8'))
+    # get updates from the server
+    get_update_from_server()
+    # send 6 to server- means that the update is file/folder that has been created
+    socket_client.send(bytes("6", 'UTF-8'))
+    send_file(name, path)
+    # send 0 to server- means that we ended this connection
+    socket_client.send(bytes("0", 'UTF-8'))
+    socket_client.close()
+
+
+'''
+function that modify the server that we have an updates- file/folder has been moved or renamed.
+send the server the updates.
+and before it, ask from server updates for us.
+'''
 
 
 def on_moved(event):
     global socket_client
-    print(f"ok ok ok, someone moved {event.src_path} to {event.dest_path}")
     # get the old path of the event that moved
     old_path = event.src_path
     # get the file/folder name of the source
@@ -610,11 +806,8 @@ def on_moved(event):
         socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
         # send 5 to server- means that we have an update to send to him
         socket_client.send(bytes("5", 'UTF-8'))
-        # send 7 to server- means that the update is file/folder that has been deleted
-        socket_client.send(bytes("7", 'UTF-8'))
-        send_file_to_remove_or_moved(new_name, new_path)
-        # send 5 to server- means that we have an update to send to him
-        socket_client.send(bytes("5", 'UTF-8'))
+        # get updates from the server
+        get_update_from_server()
         # send 6 to server- means that the update is file/folder that has been created
         socket_client.send(bytes("6", 'UTF-8'))
         send_file(new_name, new_path)
@@ -645,9 +838,11 @@ def on_moved(event):
         socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
         # send 5 to server- means that we have an update to send to him
         socket_client.send(bytes("5", 'UTF-8'))
+        # get updates from the server
+        get_update_from_server()
         # send 6 to server- means that the update is file/folder that has been created
         socket_client.send(bytes("6", 'UTF-8'))
-        # the source is file
+        # file
         if not event.is_directory:
             send_file(new_name, new_path)
             # add the new path to the files_and_folders
@@ -661,10 +856,8 @@ def on_moved(event):
         # add the new path to the files_and_folders
         files_and_folders.append(new_path)
         for root, dirs, files in os.walk(new_path, topdown=True):
-            # only sub-directories
+            # only init folders
             for directory_name in dirs:
-                # send 5 to server- means that we have an update to send to him
-                socket_client.send(bytes("5", 'UTF-8'))
                 # send 6 to server- means that the update is file/folder that has been created
                 socket_client.send(bytes("6", 'UTF-8'))
                 send_folder_relative_path(directory_name)
@@ -672,8 +865,6 @@ def on_moved(event):
                 files_and_folders.append(os.path.join(root, directory_name))
             # only files
             for file_name in files:
-                # send 5 to server- means that we have an update to send to him
-                socket_client.send(bytes("5", 'UTF-8'))
                 # send 6 to server- means that the update is file/folder that has been created
                 socket_client.send(bytes("6", 'UTF-8'))
                 file_path = os.path.join(root, file_name)
@@ -695,6 +886,8 @@ def on_moved(event):
     socket_client.send(global_sequence_number.to_bytes(8, sys.byteorder))
     # send 5 to server- means that we have an update to send to him
     socket_client.send(bytes("5", 'UTF-8'))
+    # get updates from the server
+    get_update_from_server()
     # send 9 to server- means that the update is file/folder that has been moved
     socket_client.send(bytes("8", 'UTF-8'))
     if not event.is_directory:
@@ -727,10 +920,20 @@ def on_moved(event):
     socket_client.close()
 
 
+'''
+function that get from the server a name (of file/folder/path..)
+'''
+
+
 def get_name():
     length = int.from_bytes(socket_client.recv(8), sys.byteorder)
     name = socket_client.recv(length).decode('UTF-8', "ignore")
     return name
+
+
+'''
+function that check if the arguments to the main are valid
+'''
 
 
 def check_arguments(arr):
@@ -753,9 +956,19 @@ def check_arguments(arr):
         return False
 
     # if we have identifier - check if valid
-    # if len(arr) == 6:
-    #     if len(arr[5])
+    if len(arr) == 6:
+        if len(arr[5]) != SIZE_ID:
+            return False
+    # if we have identifier - check if the path exists
+    else:
+        if not os.path.exists(arr[3]):
+            return False
     return True
+
+
+'''
+main function-check if arguments valid, and start tracking data (with or without is)
+'''
 
 
 def main():
